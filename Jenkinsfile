@@ -1,24 +1,44 @@
-@Library('javahome-libs') _
-pipeline{
-    agent any
-    tools{
-        maven 'maven3'
+node('master'){
+    // Add maven to path
+    env.PATH = "/opt/maven3/bin/:$PATH"
+    
+    stage('Git Clone/Pull'){
+        git branch: 'dev', 
+			url: 'https://github.com/nalapatt/JenkinsCI-CDDockerImage'
     }
-    stages{
-        stage("Create Folder"){
-            steps{
-                sh "mkdir -p ${env.JOB_NAME}"
-            }
-        }
-        stage("Maven Build"){
-            steps{
-                sh 'mvn clean package'
-            }
-        }
-        stage("Deploy to Tomcat Dev"){
-            steps{
-                tomcatDeploy('tomcat-dev','ec2-user','172.31.40.104')
-            }
-        }
-    }
+	
+	stage('Build Docker Image'){
+		sh "mvn clean package"
+		sh "mv target/*.war target/myweb.war"
+		sh "docker build -t nalapatt/my-app:1.0 ."
+	}
+	
+	stage('Push Image'){
+	  withCredentials([string(credentialsId: 'docker-hub', variable: 'dockerHubPwd')]) {
+         sh "docker login -u nalapatt -p ${dockerHubPwd}"
+      }
+	  sh "docker push nalapatt/my-app:1.0"
+	}
+	
+	stage('Delete Old Container'){
+	   sshagent (credentials: ['dev-docker']) {
+	       try{
+		     def dockrRm = "docker rm -f my-app"
+			 def dockrRmImage = "docker rmi  nalapatt/my-app:1.0"
+	         sh "ssh -o StrictHostKeyChecking=no ec2-user@172.31.43.90  ${dockrRm} "
+			 sh "ssh -o StrictHostKeyChecking=no ec2-user@172.31.43.90  ${dockrRmImage} "
+		   }catch(e){
+			  echo "container my-app not found" 
+		   }
+	   }
+	   
+	}
+	
+	stage('Deploy On Dev'){
+		sshagent (credentials: ['dev-docker']) {
+		 def dockerRun = "docker run -d -p 8080:8080 --name=my-app kammana/my-app:1.0"
+		 sh "ssh -o StrictHostKeyChecking=no ec2-user@172.31.43.90  ${dockerRun} "
+		}
+	}
+    
 }
